@@ -1,3 +1,3 @@
 # minecraft_ressource_pack_editor
 
-A new Flutter project.
+Ce projet est entièrement généré par IA avec Cursor.
