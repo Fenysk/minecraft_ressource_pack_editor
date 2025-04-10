@@ -73,6 +73,7 @@ class _MinecraftResourcePackEditorState extends State<MinecraftResourcePackEdito
               instanceName: args['instanceName']!,
               resourcePackName: args['resourcePackName']!,
               toggleTheme: toggleTheme,
+              extractedPath: '',
             ),
           );
         }

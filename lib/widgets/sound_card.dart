@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:minecraft_ressource_pack_editor/models/sound.dart';
-import 'package:path/path.dart' as path;
 
 class SoundCard extends StatelessWidget {
   final Sound sound;
@@ -14,6 +13,7 @@ class SoundCard extends StatelessWidget {
   final String extractedPath;
   final Function(String, Sound) onPlaySound;
   final Function(Sound)? onToggleExpand;
+  final Function(Sound)? onShowDetails;
 
   const SoundCard({
     super.key,
@@ -27,6 +27,7 @@ class SoundCard extends StatelessWidget {
     required this.extractedPath,
     required this.onPlaySound,
     this.onToggleExpand,
+    this.onShowDetails,
   });
 
   @override
@@ -109,6 +110,14 @@ class SoundCard extends StatelessWidget {
                     IconButton(
                       icon: Icon(isPlaying ? Icons.stop : Icons.play_arrow),
                       onPressed: () => onPlaySound(soundPath, sound),
+                    ),
+
+                  // Bouton pour afficher les détails
+                  if (onShowDetails != null)
+                    IconButton(
+                      icon: const Icon(Icons.info_outline),
+                      tooltip: 'Afficher les détails',
+                      onPressed: () => onShowDetails!(sound),
                     ),
                 ],
               ),

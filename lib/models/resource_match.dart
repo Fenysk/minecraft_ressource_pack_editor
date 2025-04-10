@@ -25,7 +25,10 @@ class SoundTextureMatch {
   final String soundPath;
   final List<String> texturePaths;
 
-  SoundTextureMatch({required this.soundPath, required this.texturePaths});
+  SoundTextureMatch({
+    required this.soundPath,
+    required this.texturePaths,
+  });
 
   Map<String, dynamic> toJson() {
     return {
@@ -36,7 +39,7 @@ class SoundTextureMatch {
 
   factory SoundTextureMatch.fromJson(Map<String, dynamic> json) {
     return SoundTextureMatch(
-      soundPath: json['soundPath'],
+      soundPath: json['soundPath'] as String,
       texturePaths: List<String>.from(json['texturePaths']),
     );
   }

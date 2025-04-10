@@ -4,6 +4,9 @@ import 'package:path/path.dart' as path;
 import 'package:flutter/foundation.dart';
 import '../models/resource_match.dart';
 
+/// Type de callback pour les mises à jour de progression
+typedef ProgressCallback = void Function(double progress, String message);
+
 class MatcherProgress {
   final double progress; // 0.0 à 1.0
   final String message;
@@ -39,6 +42,9 @@ class ResourceMatcherService {
   /// Logs d'opération
   final List<String> _logs = [];
 
+  /// Mode debug pour les logs détaillés
+  final bool _debugMode = true;
+
   /// Stream pour suivre la progression
   final progressController = ValueNotifier<MatcherProgress?>(null);
 
@@ -46,8 +52,21 @@ class ResourceMatcherService {
   List<String> get logs => List.unmodifiable(_logs);
 
   void _log(String message) {
-    print(message);
-    _logs.add("${DateTime.now().toIso8601String().substring(11, 19)} - $message");
+    final logMsg = "${DateTime.now().toIso8601String().substring(11, 19)} - $message";
+    _logs.add(logMsg);
+    if (kDebugMode) {
+      print(logMsg);
+    }
+  }
+
+  void _logDebug(String message) {
+    if (_debugMode) {
+      final logMsg = "${DateTime.now().toIso8601String().substring(11, 19)} - DEBUG - $message";
+      _logs.add(logMsg);
+      if (kDebugMode) {
+        print(logMsg);
+      }
+    }
   }
 
   void _updateProgress({
@@ -131,7 +150,7 @@ class ResourceMatcherService {
 
         if (processedSounds % 50 == 0 || processedSounds == totalSounds) {
           final progressPercent = 0.6 + (0.4 * (processedSounds / totalSounds));
-          _updateProgress(progress: progressPercent, message: "Analyse son ${processedSounds}/${totalSounds}...", current: processedSounds, total: totalSounds);
+          _updateProgress(progress: progressPercent, message: "Analyse son $processedSounds/$totalSounds...", current: processedSounds, total: totalSounds);
         }
 
         final soundPath = soundFile.path;
@@ -327,12 +346,11 @@ class ResourceMatcherService {
     return name.replaceAll(regex, '');
   }
 
-  /// Trouve les textures associées aux sons
+  /// Génère les correspondances sons-textures
   Future<Map<String, List<String>>> findTexturesForSounds(String resourcePackPath) async {
-    _log("Génération des correspondances son-texture...");
-
-    // Initialiser le résultat
     final Map<String, List<String>> soundToTextures = {};
+
+    _log('Démarrage de la génération des correspondances pour $resourcePackPath');
 
     try {
       _updateProgress(progress: 0.1, message: "Analyse des fichiers...", current: 10, total: 100);
@@ -380,7 +398,7 @@ class ResourceMatcherService {
         }
 
         final soundPath = soundFile.path;
-        final List<String> matchedTextures = _findTexturesForSound(soundPath, textureIndex, texturesDir.path);
+        final List<String> matchedTextures = _findTexturesForSound(soundPath, textureIndex.values.toList());
 
         if (matchedTextures.isNotEmpty) {
           soundToTextures[soundPath] = matchedTextures;
@@ -411,61 +429,407 @@ class ResourceMatcherService {
     }
   }
 
-  /// Trouve les textures qui correspondent à un son spécifique
-  List<String> _findTexturesForSound(String soundPath, Map<String, String> textureIndex, String texturesBasePath) {
-    final List<String> result = [];
+  /// Trouve les textures correspondant à un son spécifique
+  List<String> _findTexturesForSound(String soundPath, List<String> texturePaths) {
+    final List<String> matchResults = [];
+    final textureScores = <String, int>{};
 
-    try {
-      // Obtenir le nom du son sans extension et chemin
-      final soundName = path.basenameWithoutExtension(soundPath);
-      final soundCategory = path.basename(path.dirname(soundPath));
+    // Extraire des informations sur le son pour le matching
+    final soundName = path.basenameWithoutExtension(soundPath).toLowerCase();
+    final soundDir = path.dirname(soundPath).toLowerCase();
+    final soundPathParts = soundPath.split('/');
+    final soundType = soundPathParts.isNotEmpty ? soundPathParts[0] : '';
 
-      // Extraire le type d'action (break, place, etc.) s'il existe
-      String? actionType;
-      for (final action in _actionTypes) {
-        if (soundName.contains(action)) {
-          actionType = action;
-          break;
-        }
-      }
+    _logDebug('\n--- ANALYSE POUR SON: $soundPath ---');
+    _logDebug('  Nom: $soundName');
+    _logDebug('  Dossier: $soundDir');
 
-      // Base du nom sans l'action et sans numéro séquentiel
-      String baseNameWithoutAction = _removeSequentialNumber(soundName);
-      if (actionType != null) {
-        baseNameWithoutAction = baseNameWithoutAction.replaceAll(actionType, '').trim();
-      }
-
-      // Si vide après avoir enlevé l'action, utiliser la catégorie
-      if (baseNameWithoutAction.isEmpty) {
-        baseNameWithoutAction = soundCategory;
-      }
-
-      // Chercher les textures qui pourraient correspondre
-      for (final texturePath in textureIndex.keys) {
-        final textureName = path.basenameWithoutExtension(texturePath);
-
-        // Correspondance directe
-        if (textureName.toLowerCase() == baseNameWithoutAction.toLowerCase()) {
-          result.add(textureIndex[texturePath]!);
-          continue;
-        }
-
-        // Correspondance avec catégorie
-        if (texturePath.contains(soundCategory) && textureName.contains(baseNameWithoutAction)) {
-          result.add(textureIndex[texturePath]!);
-          continue;
-        }
-
-        // Correspondance partielle
-        if (baseNameWithoutAction.length > 3 && textureName.toLowerCase().contains(baseNameWithoutAction.toLowerCase())) {
-          result.add(textureIndex[texturePath]!);
-        }
-      }
-    } catch (e) {
-      _log('Erreur lors de la recherche de textures pour $soundPath: $e');
+    // Déterminer le type d'action du son (déterminé par le nom ou le contexte)
+    String actionType = '';
+    if (soundName.contains('break')) {
+      actionType = 'break';
+    } else if (soundName.contains('place') || soundName.contains('set')) {
+      actionType = 'place';
+    } else if (soundName.contains('step') || soundName.contains('walk')) {
+      actionType = 'step';
+    } else if (soundName.contains('hit')) {
+      actionType = 'hit';
     }
 
-    return result;
+    _logDebug('  Action: $actionType');
+
+    // Déterminer le contexte matériel
+    String materialContext = '';
+    String baseMaterial = '';
+
+    // Extraction depuis le dossier
+    final dirParts = soundDir.split('/');
+    if (dirParts.length >= 2) {
+      // Utilisez le nom du sous-dossier comme contexte matériel
+      materialContext = dirParts[1];
+      _logDebug('  Contexte matériel (dossier): $materialContext');
+    }
+
+    // Extraction depuis le nom du fichier (si pas trouvé dans le dossier)
+    if (materialContext.isEmpty) {
+      // Cas spéciaux pour une meilleure détection des matériaux
+      if (soundName.contains('wood_') || soundName.contains('_wood')) {
+        materialContext = 'wood';
+        _logDebug('  Contexte matériel (nom - cas spécial): $materialContext');
+      } else if (soundName.contains('stone_') || soundName.contains('_stone')) {
+        materialContext = 'stone';
+        _logDebug('  Contexte matériel (nom - cas spécial): $materialContext');
+      } else {
+        // Recherche basique de matériau dans le nom
+        for (final material in [
+          'wood',
+          'stone',
+          'grass',
+          'dirt',
+          'gravel',
+          'sand',
+          'wool',
+          'metal',
+          'glass',
+          'bone',
+          'netherrack',
+          'soul_sand',
+          'amethyst',
+          'bamboo'
+        ]) {
+          if (soundName.contains(material)) {
+            materialContext = material;
+            _logDebug('  Contexte matériel (nom): $materialContext');
+            break;
+          }
+        }
+      }
+    }
+
+    // Simplifier le contexte matériel pour la recherche
+    baseMaterial = materialContext.replaceAll('_block', '').replaceAll('_planks', '');
+    if (baseMaterial.isEmpty) baseMaterial = materialContext;
+
+    _logDebug('  Matériau de base: $baseMaterial');
+
+    // Vérifier si le matériau appartient à un groupe
+    String? materialGroup;
+    final materialGroups = _getMaterialGroups();
+    for (final group in materialGroups.keys) {
+      if (materialGroups[group]!.any((m) => baseMaterial.contains(m))) {
+        materialGroup = group;
+        _logDebug('  Groupe de matériau: $materialGroup');
+        break;
+      }
+    }
+
+    // Suppression des interdictions spécifiques pour utiliser un système plus général
+
+    // Pour éviter de recalculer les parties de chemins à chaque itération
+    final Set<String> precomputedBasenames = {};
+    for (final texturePath in texturePaths) {
+      precomputedBasenames.add(path.basenameWithoutExtension(texturePath).toLowerCase());
+    }
+
+    // Ensemble de textures à traiter immédiatement car excellent match
+    final Set<String> fastMatchTextures = {};
+    // Si on a un contexte matériel précis
+    if (materialContext.isNotEmpty) {
+      for (int i = 0; i < texturePaths.length; i++) {
+        final texturePath = texturePaths[i];
+        final textureName = precomputedBasenames.elementAt(i);
+
+        // Prioritiser les correspondances exactes pour traitement immédiat
+        if (textureName == materialContext || textureName == '${materialContext}_block' || textureName == baseMaterial || textureName == '${baseMaterial}_block') {
+          fastMatchTextures.add(texturePath);
+        }
+      }
+    }
+
+    // Si des correspondances exactes sont trouvées, on peut retourner immédiatement
+    if (fastMatchTextures.isNotEmpty && actionType != 'step') {
+      _logDebug('  CORRESPONDANCES EXACTES TROUVÉES - OPTIMISATION RAPIDE');
+      final result = fastMatchTextures.take(3).toList();
+      return result;
+    }
+
+    // Tracker pour les correspondances exactes de matériau
+    bool foundExactMaterial = false;
+
+    // Traiter chaque texture
+    for (final texturePath in texturePaths) {
+      final textureName = path.basenameWithoutExtension(texturePath).toLowerCase();
+
+      // Extraction du chemin pour analyse structurelle
+      final texturePathParts = texturePath.split('/');
+      final textureType = texturePathParts.isNotEmpty ? texturePathParts[0] : '';
+
+      // Vérifications rapides de filtrage
+      if (baseMaterial.isNotEmpty && materialGroup != null) {
+        // Extraire le groupe potentiel de la texture
+        String? textureGroup;
+        for (final group in materialGroups.keys) {
+          if (materialGroups[group]!.any((m) => textureName.contains(m) && m.length > 2)) {
+            textureGroup = group;
+            break;
+          }
+        }
+
+        // Si la texture a un groupe de matériaux qui est différent du son, c'est probablement un mauvais match
+        if (textureGroup != null && textureGroup != materialGroup) {
+          // Certains groupes sont compatibles entre eux (par exemple bois et plantes)
+          bool compatibleGroups = false;
+          if ((materialGroup == 'bois' && textureGroup == 'plantes') || (materialGroup == 'plantes' && textureGroup == 'bois')) {
+            compatibleGroups = true;
+          }
+
+          if (!compatibleGroups) {
+            continue; // Sauter cette texture si groupes incompatibles
+          }
+        }
+      }
+
+      // Initialiser le score à 0
+      int score = 0;
+
+      // ===== CORRESPONDANCE AVEC MATÉRIAU =====
+
+      // Tests par ordre de rapidité d'exécution (du plus rapide au plus lent)
+
+      // 1. Correspondance exacte (la plus rapide)
+      if (textureName == materialContext) {
+        score += 2000;
+        foundExactMaterial = true;
+        _logDebug('  - MATCH EXACT: $texturePath (+2000)');
+      } else if (textureName == '${materialContext}_block') {
+        score += 1900;
+        foundExactMaterial = true;
+        _logDebug('  - MATCH BLOCK: $texturePath (+1900)');
+      } else if (textureName == baseMaterial) {
+        score += 1000;
+        foundExactMaterial = true;
+        _logDebug('  - MATCH BASE: $texturePath (+1000)');
+      } else if (textureName == '${baseMaterial}_block') {
+        score += 900;
+        foundExactMaterial = true;
+        _logDebug('  - MATCH BASE BLOCK: $texturePath (+900)');
+      }
+      // 2. Contient le matériau
+      else if (baseMaterial.length > 2) {
+        if (textureName.contains(materialContext)) {
+          // Vérification de mot entier seulement si nécessaire
+          if (_isWholeWord(textureName, materialContext)) {
+            score += 1500;
+            foundExactMaterial = true;
+            _logDebug('  - MATCH MOT ENTIER: $texturePath (+1500)');
+          } else {
+            score += 700;
+            foundExactMaterial = true;
+            _logDebug('  - CONTIENT MATÉRIAU: $texturePath (+700)');
+          }
+        } else if (textureName.contains(baseMaterial)) {
+          // Vérification de mot entier seulement si nécessaire
+          if (_isWholeWord(textureName, baseMaterial)) {
+            score += 800;
+            foundExactMaterial = true;
+            _logDebug('  - MATCH BASE MOT ENTIER: $texturePath (+800)');
+          } else {
+            score += 500;
+            foundExactMaterial = true;
+            _logDebug('  - CONTIENT BASE: $texturePath (+500)');
+          }
+        }
+      }
+
+      // Bonus pour le chemin (test simple)
+      if (texturePath.contains('/$baseMaterial/')) {
+        score += 200;
+        foundExactMaterial = true;
+      }
+
+      // Si aucune correspondance de base trouvée, passer à la texture suivante
+      if (score == 0) continue;
+
+      // ===== BONUS CONTEXTUELS =====
+
+      // Ces bonus sont appliqués seulement aux candidats valides
+
+      // 1. Bonus par type d'action
+      if (actionType.isNotEmpty) {
+        if (actionType == 'step' && (textureName.contains('_top') || textureName.contains('_planks'))) {
+          score += 300;
+        } else if (actionType == 'break' && !textureName.contains('_top') && !textureName.contains('_side')) {
+          score += 200;
+        } else if (actionType == 'place' && !textureName.contains('_top') && !textureName.contains('_bottom')) {
+          score += 200;
+        }
+      }
+
+      // 2. Bonus de structure (test simple)
+      if (soundType == textureType) {
+        score += 150;
+
+        // Bonus supplémentaire si les deux niveaux correspondent
+        if (soundPathParts.length > 1 && texturePathParts.length > 1 && soundPathParts[1] == texturePathParts[1]) {
+          score += 200;
+        }
+      }
+
+      // 3. Bonus de groupe sémantique
+      if (materialGroup != null) {
+        // Vérification par groupe sémantique
+        bool sameGroup = false;
+        final groupMaterials = materialGroups[materialGroup]!;
+
+        // Utiliser une vérification par ensemble plutôt qu'une boucle
+        for (final material in groupMaterials) {
+          if (material.length > 2 && textureName.contains(material)) {
+            sameGroup = true;
+            break;
+          }
+        }
+
+        if (sameGroup) {
+          score += 250;
+        }
+      }
+
+      // 4. Bonus de similarité (coûteux - appliquer seulement aux candidats prometteurs)
+      if (score > 500 && baseMaterial.length > 2) {
+        double similarity = _computeQuickSimilarity(baseMaterial, textureName);
+        if (similarity > 0.6) {
+          int similarityBonus = (similarity * 300).round();
+          score += similarityBonus;
+        }
+      }
+
+      // 5. Bonus spécifiques (cas particuliers)
+      if (materialContext == 'bamboo_wood') {
+        if (textureName.contains('bamboo_') && (textureName.contains('_planks') || textureName.contains('_block'))) {
+          score += 1000;
+        }
+      }
+
+      // Ajouter à la liste des résultats
+      textureScores[texturePath] = score;
+    }
+
+    // Si aucune texture pertinente trouvée
+    if (textureScores.isEmpty) {
+      _logDebug('  !!! AUCUNE TEXTURE PERTINENTE TROUVÉE - ARRÊT DE LA RECHERCHE');
+      return [];
+    }
+
+    // Trier et limiter aux meilleurs résultats
+    final sortedTextures = textureScores.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+
+    // Prendre les 3 meilleures textures maximum
+    final int maxResults = 3;
+    final int resultCount = sortedTextures.length > maxResults ? maxResults : sortedTextures.length;
+
+    for (var i = 0; i < resultCount; i++) {
+      matchResults.add(sortedTextures[i].key);
+      _logDebug('  - RÉSULTAT #${i + 1}: ${path.basename(sortedTextures[i].key)} (score: ${sortedTextures[i].value})');
+    }
+
+    return matchResults;
+  }
+
+  /// Méthode optimisée pour calculer une similarité rapide entre deux chaînes
+  double _computeQuickSimilarity(String a, String b) {
+    // Cas triviaux
+    if (a == b) return 1.0;
+    if (a.isEmpty || b.isEmpty) return 0.0;
+
+    // Utiliser des ensembles de caractères pour une comparaison rapide
+    final setA = a.split('').toSet();
+    final setB = b.split('').toSet();
+
+    // Coefficient de Jaccard: intersection / union
+    final intersection = setA.intersection(setB).length;
+    final union = setA.union(setB).length;
+
+    return intersection / union;
+  }
+
+  /// Vérifie si search est un mot entier dans text
+  bool _isWholeWord(String text, String search) {
+    // Optimisation: vérifier d'abord si le texte contient la recherche
+    if (!text.contains(search)) return false;
+
+    // Utiliser une expression régulière avec des limites de mots
+    final regexp = RegExp(r'\b' + search + r'\b');
+    return regexp.hasMatch(text);
+  }
+
+  /// Cache des groupes de matériaux (évite de recréer à chaque appel)
+  Map<String, List<String>> _getMaterialGroups() {
+    return {
+      'bois': [
+        'oak',
+        'spruce',
+        'birch',
+        'jungle',
+        'acacia',
+        'dark_oak',
+        'mangrove',
+        'bamboo',
+        'cherry',
+        'wood',
+        'planks',
+        'log'
+      ],
+      'pierre': [
+        'stone',
+        'cobblestone',
+        'granite',
+        'diorite',
+        'andesite',
+        'deepslate',
+        'tuff',
+        'basalt',
+        'blackstone',
+        'calcite'
+      ],
+      'métaux': [
+        'iron',
+        'gold',
+        'copper',
+        'netherite',
+        'chain',
+        'metal'
+      ],
+      'cristaux': [
+        'amethyst',
+        'crystal',
+        'glass',
+        'diamond',
+        'emerald',
+        'quartz'
+      ],
+      'terre': [
+        'dirt',
+        'grass',
+        'mud',
+        'clay',
+        'soul',
+        'sand',
+        'gravel',
+        'soil'
+      ],
+      'plantes': [
+        'leaves',
+        'azalea',
+        'vine',
+        'moss',
+        'flower',
+        'root',
+        'sapling',
+        'spore',
+        'fungus',
+        'wart'
+      ],
+    };
   }
 
   /// Récupère récursivement tous les fichiers d'un dossier avec les extensions spécifiées
@@ -526,24 +890,35 @@ class ResourceMatcherService {
     }).toList();
   }
 
-  /// Invalide le cache des correspondances son-texture
+  /// Invalide le cache des correspondances son-texture et supprime tout fichier cache
   Future<void> invalidateCache(String resourcePackPath) async {
-    final cacheFile = File('$resourcePackPath/sound_texture_matches.json');
-    if (await cacheFile.exists()) {
-      _log('Suppression du cache pour $resourcePackPath');
-      try {
+    try {
+      // Supprimer le fichier de cache
+      final cacheFile = File('$resourcePackPath/sound_texture_matches.json');
+      if (await cacheFile.exists()) {
+        _log('Suppression du fichier cache...');
         await cacheFile.delete();
-        _log('Cache supprimé avec succès');
-      } catch (e) {
-        _log('Erreur lors de la suppression du cache: $e');
-        rethrow;
       }
-    } else {
-      _log('Aucun fichier cache trouvé à $resourcePackPath');
+
+      // Supprimer tout autre fichier de cache potentiel
+      final cacheDir = Directory(resourcePackPath);
+      final entities = await cacheDir.list().toList();
+
+      for (final entity in entities) {
+        if (entity is File && (entity.path.endsWith('.cache') || entity.path.contains('cache') || entity.path.endsWith('.json'))) {
+          _log('Suppression du fichier cache supplémentaire: ${entity.path}');
+          await entity.delete();
+        }
+      }
+
+      _log('Cache nettoyé avec succès');
+    } catch (e) {
+      _log('Erreur lors du nettoyage du cache: $e');
+      rethrow;
     }
   }
 
-  /// Charge les correspondances son-texture depuis le cache ou les génère
+  /// Charge ou génère les correspondances son-texture
   Future<Map<String, List<String>>> loadOrGenerateSoundTextureMatches(String resourcePackPath) async {
     try {
       // Vérifier si le fichier cache existe
@@ -564,8 +939,12 @@ class ResourceMatcherService {
             result[match.soundPath] = match.texturePaths;
           }
 
-          _log('Correspondances chargées depuis le cache: ${result.length} entrées');
-          return result;
+          // SUPPRESSION EXPLICITE DES ASSOCIATIONS INCORRECTES
+          _log('Vérification des associations incorrectes...');
+          final result2 = await _removeInvalidAssociations(result, resourcePackPath);
+
+          _log('Correspondances chargées et vérifiées: ${result2.length} entrées');
+          return result2;
         } catch (e) {
           _log('Erreur lors de la lecture du cache: $e');
           _log('Régénération des correspondances...');
@@ -574,11 +953,144 @@ class ResourceMatcherService {
       }
 
       // Si le cache n'existe pas ou en cas d'erreur, générer les correspondances
+      _log('Génération des correspondances depuis zéro...');
       return findTexturesForSounds(resourcePackPath);
     } catch (e) {
       _log('Erreur lors du chargement/génération des correspondances: $e');
       // Retourner une map vide en cas d'erreur plutôt que de planter
       return {};
+    }
+  }
+
+  /// Supprime les associations incorrectes selon des règles strictes
+  Future<Map<String, List<String>>> _removeInvalidAssociations(Map<String, List<String>> associations, String resourcePackPath) async {
+    final Map<String, List<String>> cleanedAssociations = {};
+
+    // Vérifier chaque association
+    int totalInvalid = 0;
+    final materialGroups = _getMaterialGroups();
+
+    for (final soundPath in associations.keys) {
+      final texturesList = associations[soundPath] ?? [];
+
+      // Obtenir le matériau à partir du chemin du son
+      final soundDir = path.dirname(soundPath);
+      final materialContext = path.basename(soundDir).toLowerCase();
+
+      // Extraire le matériau de base pour les matériaux composés (ex: bamboo_wood -> bamboo)
+      final baseMaterial = materialContext.split('_').first;
+
+      // Déterminer le groupe du son
+      String? soundGroup;
+      for (final group in materialGroups.keys) {
+        if (materialGroups[group]!.any((m) => baseMaterial.contains(m) || materialContext.contains(m))) {
+          soundGroup = group;
+          break;
+        }
+      }
+
+      // Liste des textures valides pour ce son
+      final validTextures = <String>[];
+
+      // Vérifier chaque texture
+      for (final texturePath in texturesList) {
+        final textureName = path.basenameWithoutExtension(texturePath).toLowerCase();
+        bool isValid = true;
+
+        // 1. Vérifier si la texture appartient à un groupe incompatible
+        if (soundGroup != null) {
+          // Déterminer le groupe de la texture
+          String? textureGroup;
+          for (final group in materialGroups.keys) {
+            if (materialGroups[group]!.any((m) => textureName.contains(m) && m.length > 2)) {
+              textureGroup = group;
+              break;
+            }
+          }
+
+          // Si la texture a un groupe différent du son et non compatible
+          if (textureGroup != null && textureGroup != soundGroup) {
+            // Certains groupes sont compatibles entre eux
+            bool compatibleGroups = false;
+            if ((soundGroup == 'bois' && textureGroup == 'plantes') || (soundGroup == 'plantes' && textureGroup == 'bois')) {
+              compatibleGroups = true;
+            }
+
+            if (!compatibleGroups) {
+              isValid = false;
+              totalInvalid++;
+              _log('SUPPRESSION: Association incorrecte entre $soundPath et $texturePath (groupe incompatible: $textureGroup vs $soundGroup)');
+            }
+          }
+        }
+
+        // 2. Vérification supplémentaire: la texture doit contenir une partie du matériau
+        if (isValid) {
+          bool hasRelevance = textureName.contains(baseMaterial);
+
+          if (!hasRelevance && materialContext.contains('_')) {
+            // Vérifier les parties du matériau composé
+            final parts = materialContext.split('_');
+            for (final part in parts) {
+              if (part.length > 2 && textureName.contains(part)) {
+                hasRelevance = true;
+                break;
+              }
+            }
+          }
+
+          if (!hasRelevance) {
+            isValid = false;
+            totalInvalid++;
+            _log('SUPPRESSION: Texture non pertinente pour $soundPath: $texturePath (ne contient pas $baseMaterial)');
+          }
+        }
+
+        // Si valide, ajouter à la liste
+        if (isValid) {
+          validTextures.add(texturePath);
+        }
+      }
+
+      // Ajouter l'association nettoyée si des textures valides existent
+      if (validTextures.isNotEmpty) {
+        cleanedAssociations[soundPath] = validTextures;
+      }
+    }
+
+    _log('Nettoyage terminé: $totalInvalid associations incorrectes supprimées');
+
+    // Enregistrer les associations nettoyées dans le cache
+    await _saveMatchesToCache(cleanedAssociations, resourcePackPath);
+
+    return cleanedAssociations;
+  }
+
+  /// Sauvegarde les correspondances dans le fichier cache
+  Future<void> _saveMatchesToCache(Map<String, List<String>> matches, String resourcePackPath) async {
+    try {
+      final cacheFile = File('$resourcePackPath/sound_texture_matches.json');
+
+      // Convertir les correspondances en liste de SoundTextureMatch pour la sérialisation
+      final List<SoundTextureMatch> matchesList = [];
+
+      for (final entry in matches.entries) {
+        matchesList.add(SoundTextureMatch(
+          soundPath: entry.key,
+          texturePaths: entry.value,
+        ));
+      }
+
+      // Convertir en JSON
+      final jsonData = matchesList.map((m) => m.toJson()).toList();
+      final jsonString = json.encode(jsonData);
+
+      // Écrire dans le fichier
+      await cacheFile.writeAsString(jsonString);
+
+      _log('Cache sauvegardé avec succès: ${matches.length} entrées');
+    } catch (e) {
+      _log('Erreur lors de la sauvegarde du cache: $e');
     }
   }
 }
