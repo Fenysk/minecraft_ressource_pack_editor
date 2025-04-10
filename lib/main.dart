@@ -1,31 +1,25 @@
 import 'package:flutter/material.dart';
+import 'pages/curseforge_instances_page.dart';
+import 'services/curseforge_service.dart';
 
-void
-main() {
-  runApp(
-    const MainApp(),
-  );
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await CurseForgeService().checkPermissions(); // Vérifie les permissions au démarrage
+  runApp(const MyApp());
 }
 
-class MainApp
-    extends
-        StatelessWidget {
-  const MainApp({
-    super.key,
-  });
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
-    return const MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: Text(
-            'Hello World!',
-          ),
-        ),
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Minecraft Resource Pack Editor',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.green),
+        useMaterial3: true,
       ),
+      home: const CurseForgeInstancesPage(),
     );
   }
 }
