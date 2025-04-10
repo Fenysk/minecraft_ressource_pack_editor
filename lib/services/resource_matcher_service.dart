@@ -438,11 +438,22 @@ class ResourceMatcherService {
     final soundName = path.basenameWithoutExtension(soundPath).toLowerCase();
     final soundDir = path.dirname(soundPath).toLowerCase();
     final soundPathParts = soundPath.split('/');
-    final soundType = soundPathParts.isNotEmpty ? soundPathParts[0] : '';
+
+    // Extraire le type de son (block, ambient, etc.)
+    String soundType = '';
+    if (soundPathParts.isNotEmpty) {
+      for (int i = 0; i < soundPathParts.length; i++) {
+        if (soundPathParts[i] == 'sounds' && i + 1 < soundPathParts.length) {
+          soundType = soundPathParts[i + 1];
+          break;
+        }
+      }
+    }
 
     _logDebug('\n--- ANALYSE POUR SON: $soundPath ---');
     _logDebug('  Nom: $soundName');
     _logDebug('  Dossier: $soundDir');
+    _logDebug('  Type son: $soundType');
 
     // Déterminer le type d'action du son (déterminé par le nom ou le contexte)
     String actionType = '';
@@ -462,16 +473,36 @@ class ResourceMatcherService {
     String materialContext = '';
     String baseMaterial = '';
 
-    // Extraction depuis le dossier
-    final dirParts = soundDir.split('/');
-    if (dirParts.length >= 2) {
-      // Utilisez le nom du sous-dossier comme contexte matériel
-      materialContext = dirParts[1];
-      _logDebug('  Contexte matériel (dossier): $materialContext');
+    // Liste des contextes génériques (pas des matériaux)
+    final genericContexts = [
+      'block',
+      'ambient',
+      'item',
+      'entity',
+      'sounds',
+      'music',
+      'sound'
+    ];
+
+    // Extraction depuis le chemin du son
+    // Exemple: sounds/block/stone/break.ogg -> stone est le matériau
+    List<String> soundParts = soundPath.toLowerCase().split(RegExp(r'[/\\]'));
+    for (int i = 0; i < soundParts.length - 1; i++) {
+      if (soundParts[i] == 'sounds' && i + 1 < soundParts.length) {
+        // Ignorer les catégories générales
+        if (i + 2 < soundParts.length && genericContexts.contains(soundParts[i + 1])) {
+          materialContext = soundParts[i + 2];
+          _logDebug('  Contexte matériel (sous-dossier): $materialContext');
+        } else if (!genericContexts.contains(soundParts[i + 1])) {
+          materialContext = soundParts[i + 1];
+          _logDebug('  Contexte matériel (dossier): $materialContext');
+        }
+        break;
+      }
     }
 
-    // Extraction depuis le nom du fichier (si pas trouvé dans le dossier)
-    if (materialContext.isEmpty) {
+    // Extraction depuis le nom du fichier (si pas trouvé dans le chemin ou si c'est un contexte générique)
+    if (materialContext.isEmpty || genericContexts.contains(materialContext)) {
       // Cas spéciaux pour une meilleure détection des matériaux
       if (soundName.contains('wood_') || soundName.contains('_wood')) {
         materialContext = 'wood';
@@ -506,11 +537,68 @@ class ResourceMatcherService {
       }
     }
 
+    // Si toujours pas de contexte matériel, essayer une dernière approche avec le nom du fichier
+    if (materialContext.isEmpty) {
+      // Enlever les suffixes numériques et d'action du nom
+      String cleanName = soundName.replaceAll(RegExp(r'\d+$'), '');
+      for (final action in [
+        'break',
+        'step',
+        'hit',
+        'place'
+      ]) {
+        cleanName = cleanName.replaceAll(action, '');
+      }
+      cleanName = cleanName.replaceAll(RegExp(r'[_\s-]+'), ' ').trim();
+
+      if (cleanName.isNotEmpty && !genericContexts.contains(cleanName)) {
+        materialContext = cleanName;
+        _logDebug('  Contexte matériel (nom nettoyé): $materialContext');
+      }
+    }
+
     // Simplifier le contexte matériel pour la recherche
     baseMaterial = materialContext.replaceAll('_block', '').replaceAll('_planks', '');
     if (baseMaterial.isEmpty) baseMaterial = materialContext;
 
     _logDebug('  Matériau de base: $baseMaterial');
+
+    // Si aucun matériau pertinent n'a été trouvé, on utilise une approche plus permissive
+    if (baseMaterial.isEmpty || genericContexts.contains(baseMaterial)) {
+      _logDebug('  !!! AUCUN MATÉRIAU SPÉCIFIQUE TROUVÉ - UTILISATION D\'UNE APPROCHE GÉNÉRIQUE');
+
+      // Au lieu d'arrêter la recherche, on va chercher des textures correspondant au type de son
+      if (soundType.isNotEmpty && !genericContexts.contains(soundType)) {
+        baseMaterial = soundType;
+        materialContext = soundType;
+        _logDebug('  Utilisation du type de son comme contexte: $soundType');
+      } else {
+        // Utiliser le nom du son complet sans extension comme dernière tentative
+        String cleanName = soundName;
+        for (final generic in genericContexts) {
+          if (cleanName.contains(generic)) {
+            cleanName = cleanName.replaceAll(generic, '');
+          }
+        }
+        cleanName = cleanName.replaceAll(RegExp(r'[_\s-]+'), ' ').trim();
+
+        if (cleanName.isNotEmpty) {
+          baseMaterial = cleanName;
+          materialContext = cleanName;
+          _logDebug('  Utilisation du nom nettoyé: $cleanName');
+        } else {
+          _logDebug('  !!! IMPOSSIBLE DE TROUVER UN CONTEXTE - UTILISATION DU NOM BRUT');
+          baseMaterial = soundName;
+          materialContext = soundName;
+        }
+      }
+    }
+
+    // Pour le débogage, afficher la tentative de recherche
+    _log('Recherche de textures pour le son: $soundPath');
+    _log('  → Contexte matériel: $materialContext');
+    _log('  → Matériau de base: $baseMaterial');
+    _log('  → Type d\'action: $actionType');
 
     // Vérifier si le matériau appartient à un groupe
     String? materialGroup;
@@ -648,7 +736,10 @@ class ResourceMatcherService {
       }
 
       // Si aucune correspondance de base trouvée, passer à la texture suivante
-      if (score == 0) continue;
+      if (score == 0) {
+        // Au lieu de sauter, assigner un score minimal pour encourager les correspondances
+        score = 50;
+      }
 
       // ===== BONUS CONTEXTUELS =====
 
@@ -710,13 +801,69 @@ class ResourceMatcherService {
         }
       }
 
-      // Ajouter à la liste des résultats
-      textureScores[texturePath] = score;
+      // 6. Traitement pour les sons sans contexte matériel clair
+      // Si le score est faible mais que la texture semble pertinente par contexte d'action
+      if (score < 200 && actionType.isNotEmpty && textureName.contains(actionType)) {
+        score += 150;
+        _logDebug('  - BONUS ACTION: $texturePath (+150)');
+      }
+
+      // 7. Correspondance par mots-clés individuels
+      // Si le score est encore faible, essayer de trouver des mots-clés communs
+      if (score < 100) {
+        // Extraire les mots-clés du matériau et de la texture
+        final materialWords = materialContext.split(RegExp(r'[_\s-]+')).where((w) => w.length > 2).toSet();
+        final textureWords = textureName.split(RegExp(r'[_\s-]+')).where((w) => w.length > 2).toSet();
+
+        // Trouver les mots-clés communs
+        final commonWords = materialWords.intersection(textureWords);
+
+        if (commonWords.isNotEmpty) {
+          score += 50 * commonWords.length;
+          _logDebug('  - MOTS-CLÉS COMMUNS: $texturePath (${commonWords.toList()}, +${50 * commonWords.length})');
+        }
+      }
+
+      // Ajouter à la liste des résultats seulement si le score est suffisant
+      // Score minimum réduit pour augmenter les chances de correspondance
+      if (score >= 50) {
+        textureScores[texturePath] = score;
+      }
     }
 
     // Si aucune texture pertinente trouvée
     if (textureScores.isEmpty) {
-      _logDebug('  !!! AUCUNE TEXTURE PERTINENTE TROUVÉE - ARRÊT DE LA RECHERCHE');
+      _logDebug('  !!! AUCUNE TEXTURE PERTINENTE TROUVÉE - MÉTHODE DE SECOURS');
+
+      // Dernière tentative: si nous n'avons trouvé aucune correspondance, prendre les textures
+      // qui contiennent simplement une partie du nom du son (méthode de secours)
+      final backupScores = <String, int>{};
+
+      for (final texturePath in texturePaths) {
+        final textureName = path.basenameWithoutExtension(texturePath).toLowerCase();
+
+        // Vérifier si le nom de la texture contient au moins 3 caractères consécutifs du nom du son
+        for (int i = 0; i <= soundName.length - 3; i++) {
+          final subString = soundName.substring(i, i + 3);
+          if (subString.length >= 3 && textureName.contains(subString)) {
+            int backupScore = 100 + (subString.length * 5);
+            backupScores[texturePath] = backupScore;
+            _logDebug('  - CORRESPONDANCE DE SECOURS: $texturePath (sous-chaîne: $subString, +$backupScore)');
+            break;
+          }
+        }
+      }
+
+      // Si on a trouvé des correspondances de secours, utiliser celles-ci
+      if (backupScores.isNotEmpty) {
+        textureScores.addAll(backupScores);
+        _logDebug('  - ${backupScores.length} CORRESPONDANCES DE SECOURS TROUVÉES');
+      }
+    }
+
+    // Si toujours aucune texture pertinente trouvée
+    if (textureScores.isEmpty) {
+      _logDebug('  !!! ÉCHEC DE TOUTES LES MÉTHODES - AUCUNE CORRESPONDANCE');
       return [];
     }
 

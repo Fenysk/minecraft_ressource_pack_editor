@@ -184,6 +184,7 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
       // Effacer les caches
       _cachedFilteredSounds = null;
       _soundTextureCache.clear();
+      _texturesForSoundCache.clear();
     });
 
     try {
@@ -213,6 +214,12 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
 
       // Charger les associations son -> texture depuis le fichier cache ou les générer si nécessaire
       final soundToTextures = await _resourceMatcher.loadOrGenerateSoundTextureMatches(_extractedPath);
+
+      debugPrint('Chargement terminé: ${soundToTextures.length} associations son-textures');
+
+      // Vider les caches
+      _texturesForSoundCache.clear();
+      _soundTextureCache.clear();
 
       setState(() {
         _sounds = sounds;
@@ -397,18 +404,20 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
   }
 
   // Récupérer toutes les textures associées à un son avec mise en cache
-  final Map<String, List<String>> _texturesForSoundCache = {};
+  final Map<String, List<Map<String, dynamic>>> _texturesForSoundCache = {};
 
-  List<String> getTexturesForSound(String soundPath) {
+  List<Map<String, dynamic>> getTexturesForSound(String soundPath) {
     // Vérifier le cache d'abord
     if (_texturesForSoundCache.containsKey(soundPath)) {
       return _texturesForSoundCache[soundPath]!;
     }
 
-    List<String> result = [];
+    final List<Map<String, dynamic>> result = [];
 
     // Normaliser le chemin donné
     final normalizedInput = _normalizePath(soundPath);
+    final material = _extractMaterial(soundPath);
+    List<String> texturePaths = [];
 
     // Vérifier différentes manières de faire correspondre les sons
     for (final key in _soundToTextures.keys) {
@@ -416,22 +425,57 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
 
       // Correspondance exacte
       if (normalizedKey == normalizedInput) {
-        result = _soundToTextures[key]!;
+        texturePaths = _soundToTextures[key]!;
         break;
       }
 
       // Correspondance par nom de fichier
       if (normalizedKey.endsWith(_normalizePath(path.basename(soundPath)))) {
-        result = _soundToTextures[key]!;
+        texturePaths = _soundToTextures[key]!;
         break;
       }
 
       // Correspondance par nom de base (sans extension)
       final soundBase = path.basenameWithoutExtension(soundPath).toLowerCase();
       if (path.basenameWithoutExtension(key).toLowerCase() == soundBase) {
-        result = _soundToTextures[key]!;
+        texturePaths = _soundToTextures[key]!;
         break;
       }
+    }
+
+    // Pour chaque texture, calculer un score basé sur le matériau
+    for (final texturePath in texturePaths) {
+      final textureName = path.basenameWithoutExtension(texturePath).toLowerCase();
+      int score = 100; // Score par défaut
+
+      if (textureName == material.toLowerCase()) {
+        score = 1000; // Correspondance exacte
+      } else if (textureName == '${material.toLowerCase()}_block') {
+        score = 900; // Correspondance avec _block
+      } else if (_containsWholeWord(textureName, material.toLowerCase())) {
+        score = 500; // Contient le matériau comme mot entier
+      } else if (textureName.contains(material.toLowerCase()) && material.length > 3) {
+        score = 300; // Contient le matériau comme sous-chaîne
+      }
+
+      if (texturePath.contains('/$material/')) {
+        score += 200; // Matériau présent dans le chemin
+      }
+
+      // Utiliser la clé 'path' pour stocker le chemin de la texture
+      result.add({
+        'path': texturePath,
+        'score': score
+      });
+    }
+
+    // Trier par score
+    result.sort((a, b) => (b['score'] as int).compareTo(a['score'] as int));
+
+    // Log pour débogage
+    if (result.isNotEmpty) {
+      debugPrint('Textures pour $soundPath: ${result.length}');
+      debugPrint('Première texture: ${result.first['path']}');
     }
 
     // Mettre en cache le résultat
@@ -740,22 +784,27 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
             // Vérifications lazy pour éviter des opérations coûteuses
             bool fileExists = false;
             bool hasTextures = false;
-            List<String> texturesForSound = [];
+            List<Map<String, dynamic>> texturesForSound = [];
 
             try {
               // Vérifier si le fichier existe (opération I/O potentiellement coûteuse)
               final file = File(soundFullPath);
               fileExists = file.existsSync();
 
-              // Vérifier les textures uniquement si nécessaire
-              if (_showOnlyWithTextures || _expandedSounds['${sound.category}/${sound.path}'] == true) {
-                hasTextures = hasSoundTextures(soundFullPath);
+              // Récupérer les textures associées dans tous les cas
+              hasTextures = hasSoundTextures(soundFullPath);
+
+              // Puis charger les textures si elles existent
+              if (hasTextures) {
+                texturesForSound = getTexturesForSound(soundFullPath);
+                // Vérification supplémentaire que les textures sont bien chargées
+                hasTextures = texturesForSound.isNotEmpty;
+
                 if (hasTextures) {
-                  texturesForSound = getTexturesForSound(soundFullPath);
+                  debugPrint('Son ${sound.name}: ${texturesForSound.length} textures trouvées');
+                } else {
+                  debugPrint('Son ${sound.name}: aucune texture trouvée après vérification');
                 }
-              } else {
-                // Faire une vérification légère pour l'affichage sans charger les textures
-                hasTextures = hasSoundTextures(soundFullPath);
               }
             } catch (e) {
               debugPrint('Erreur lors de la vérification du son $soundFullPath: $e');
@@ -927,11 +976,11 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
         if (texturesExact.isNotEmpty) {
           // Il y a des textures mais elles n'ont pas été associées
           final result = <Map<String, dynamic>>[];
-          for (final texturePath in texturesExact) {
+          for (final texture in texturesExact) {
             result.add({
-              'texturePath': texturePath,
-              'score': -1, // Score spécial pour indiquer que c'est une suggestion
-              'matches': '$material (suggestion, non associé)',
+              'texturePath': texture['path'],
+              'score': texture['score'],
+              'matches': '$material (suggestion)',
             });
           }
           return result;
@@ -940,29 +989,10 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
 
       // Analyser les textures correspondantes
       final List<Map<String, dynamic>> result = [];
-      for (final texturePath in textures) {
-        final textureName = path.basenameWithoutExtension(path.basename(texturePath));
-
-        // Calculer un score réel basé sur les mêmes règles que l'algorithme principal
-        int score = 0;
-
-        if (textureName.toLowerCase() == material.toLowerCase()) {
-          score = 1000; // Correspondance exacte
-        } else if (textureName.toLowerCase() == '${material.toLowerCase()}_block') {
-          score = 900; // Correspondance avec _block
-        } else if (_containsWholeWord(textureName.toLowerCase(), material.toLowerCase())) {
-          score = 500; // Contient le matériau comme mot entier
-        } else if (textureName.toLowerCase().contains(material.toLowerCase()) && material.length > 3) {
-          score = 300; // Contient le matériau comme sous-chaîne
-        }
-
-        if (texturePath.contains('/$material/')) {
-          score += 200; // Matériau présent dans le chemin
-        }
-
+      for (final texture in textures) {
         result.add({
-          'texturePath': texturePath,
-          'score': score,
+          'texturePath': texture['path'],
+          'score': texture['score'],
           'matches': material,
         });
       }
@@ -978,9 +1008,9 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
   }
 
   /// Recherche les textures contenant le nom exact du matériau
-  List<String> _findExactMaterialTextures(String texturesBasePath, String material) {
+  List<Map<String, dynamic>> _findExactMaterialTextures(String texturesBasePath, String material) {
     try {
-      final result = <String>[];
+      final result = <Map<String, dynamic>>[];
       final dir = Directory(texturesBasePath);
 
       if (!dir.existsSync()) return [];
@@ -993,10 +1023,30 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
           final fileName = path.basenameWithoutExtension(entity.path).toLowerCase();
 
           if (fileName == material.toLowerCase() || fileName == '${material.toLowerCase()}_block' || _containsWholeWord(fileName, material.toLowerCase())) {
-            result.add(entity.path);
+            int score = 100;
+
+            if (fileName == material.toLowerCase()) {
+              score = 1000; // Correspondance exacte
+            } else if (fileName == '${material.toLowerCase()}_block') {
+              score = 900; // Correspondance avec _block
+            } else if (_containsWholeWord(fileName, material.toLowerCase())) {
+              score = 500; // Contient le matériau comme mot entier
+            }
+
+            if (entity.path.contains('/$material/')) {
+              score += 200; // Matériau présent dans le chemin
+            }
+
+            result.add({
+              'path': entity.path,
+              'score': score
+            });
           }
         }
       }
+
+      // Trier les résultats par score
+      result.sort((a, b) => (b['score'] as int).compareTo(a['score'] as int));
 
       return result;
     } catch (e) {

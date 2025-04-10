@@ -1,13 +1,14 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:minecraft_ressource_pack_editor/models/sound.dart';
+import 'package:path/path.dart' as p;
 
 class SoundCard extends StatelessWidget {
   final Sound sound;
   final String soundPath;
   final bool fileExists;
   final bool hasTextures;
-  final List<String> texturesForSound;
+  final List<Map<String, dynamic>> texturesForSound;
   final bool isExpanded;
   final Sound? currentlyPlayingSound;
   final String extractedPath;
@@ -34,6 +35,12 @@ class SoundCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isPlaying = currentlyPlayingSound == sound;
     final textureCount = texturesForSound.length;
+
+    // Log pour débogage
+    debugPrint('SoundCard pour ${sound.name}: hasTextures=$hasTextures, textureCount=$textureCount');
+    if (hasTextures && textureCount > 0) {
+      debugPrint('Première texture: ${texturesForSound.first['path']}');
+    }
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -81,12 +88,45 @@ class SoundCard extends StatelessWidget {
                             ),
                           ),
                           if (hasTextures && textureCount > 0)
-                            Text(
-                              'Textures: $textureCount',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.blue.shade700,
-                              ),
+                            Row(
+                              children: [
+                                Text(
+                                  'Textures ($textureCount): ',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.blue.shade700,
+                                  ),
+                                ),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(3),
+                                  child: SizedBox(
+                                    height: 16,
+                                    width: 16,
+                                    child: Builder(builder: (context) {
+                                      try {
+                                        final texturePath = texturesForSound.first['path'] as String;
+                                        return Image.file(
+                                          File(texturePath),
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (context, error, stackTrace) {
+                                            debugPrint('Erreur chargement image: $error');
+                                            return Container(
+                                              color: Colors.grey.shade200,
+                                              child: const Icon(Icons.image_not_supported, size: 10),
+                                            );
+                                          },
+                                        );
+                                      } catch (e) {
+                                        debugPrint('Erreur structure texture: $e');
+                                        return Container(
+                                          color: Colors.red.shade200,
+                                          child: const Icon(Icons.error_outline, size: 10),
+                                        );
+                                      }
+                                    }),
+                                  ),
+                                ),
+                              ],
                             )
                           else
                             Text(
@@ -103,7 +143,7 @@ class SoundCard extends StatelessWidget {
                   ),
 
                   // Afficher directement la première texture associée (s'il y en a)
-                  if (hasTextures && texturesForSound.isNotEmpty) _buildThumbnail(texturesForSound.first),
+                  if (hasTextures && textureCount > 0) _buildThumbnail(),
 
                   // Bouton de lecture
                   if (fileExists)
@@ -124,13 +164,26 @@ class SoundCard extends StatelessWidget {
             ),
 
             // Affichage des textures si le son est étendu
-            if (isExpanded && hasTextures && texturesForSound.isNotEmpty)
+            if (isExpanded && hasTextures && textureCount > 0)
               Padding(
                 padding: const EdgeInsets.all(8.0),
                 child: Wrap(
                   spacing: 8.0,
                   runSpacing: 8.0,
-                  children: texturesForSound.map((texturePath) => _buildThumbnail(texturePath)).toList(),
+                  children: texturesForSound.map((textureInfo) {
+                    try {
+                      final path = textureInfo['path'] as String;
+                      return _buildThumbnail(path);
+                    } catch (e) {
+                      debugPrint('Erreur structure texture (expanded): $e');
+                      return Container(
+                        width: 50,
+                        height: 50,
+                        color: Colors.red.shade200,
+                        child: const Icon(Icons.error_outline),
+                      );
+                    }
+                  }).toList(),
                 ),
               ),
           ],
@@ -147,22 +200,43 @@ class SoundCard extends StatelessWidget {
   }
 
   /// Construit une vignette pour une texture
-  Widget _buildThumbnail(String texturePath) {
+  Widget _buildThumbnail([String? texturePath]) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(4),
-      child: Image.file(
-        File(texturePath),
+      child: SizedBox(
         width: 50,
         height: 50,
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) {
-          return Container(
-            width: 50,
-            height: 50,
-            color: Colors.grey.shade200,
-            child: const Icon(Icons.image_not_supported, size: 24),
-          );
-        },
+        child: Builder(builder: (context) {
+          try {
+            // Si un chemin est fourni, l'utiliser directement
+            final path = texturePath ?? (texturesForSound.isNotEmpty ? texturesForSound.first['path'] as String : '');
+
+            if (path.isEmpty) {
+              return Container(
+                color: Colors.grey.shade200,
+                child: const Icon(Icons.image_not_supported, size: 24),
+              );
+            }
+
+            return Image.file(
+              File(path),
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                debugPrint('Erreur chargement image: $error');
+                return Container(
+                  color: Colors.grey.shade200,
+                  child: const Icon(Icons.image_not_supported, size: 24),
+                );
+              },
+            );
+          } catch (e) {
+            debugPrint('Erreur structure texture: $e');
+            return Container(
+              color: Colors.red.shade200,
+              child: const Icon(Icons.error_outline, size: 24),
+            );
+          }
+        }),
       ),
     );
   }
