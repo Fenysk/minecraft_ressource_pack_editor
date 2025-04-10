@@ -12,4 +12,36 @@ class Sound {
     this.texture,
     this.isCustom = false,
   });
+
+  /// Crée une copie du son avec de nouvelles propriétés
+  Sound copyWith({
+    String? name,
+    String? path,
+    String? category,
+    String? texture,
+    bool? isCustom,
+  }) {
+    return Sound(
+      name: name ?? this.name,
+      path: path ?? this.path,
+      category: category ?? this.category,
+      texture: texture ?? this.texture,
+      isCustom: isCustom ?? this.isCustom,
+    );
+  }
+
+  /// Retourne le chemin complet du fichier son
+  String getFullPath(String basePath) {
+    // Utiliser path.join pour une meilleure compatibilité multiplateforme
+    return [
+      basePath,
+      'assets',
+      'minecraft',
+      'sounds',
+      '$path.ogg'
+    ].join('/');
+  }
+
+  @override
+  String toString() => 'Sound(name: $name, path: $path, category: $category, isCustom: $isCustom)';
 }

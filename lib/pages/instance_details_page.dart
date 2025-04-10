@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/curseforge_service.dart';
 import 'resource_pack_sounds_page.dart';
 
 class InstanceDetailsPage extends StatefulWidget {
   final String instanceName;
+  final Function? toggleTheme;
 
   const InstanceDetailsPage({
     super.key,
     required this.instanceName,
+    this.toggleTheme,
   });
 
   @override
@@ -15,13 +18,14 @@ class InstanceDetailsPage extends StatefulWidget {
 }
 
 class _InstanceDetailsPageState extends State<InstanceDetailsPage> {
-  final CurseForgeService _curseForgeService = CurseForgeService();
+  late final CurseForgeService _curseForgeService;
   List<String> _resourcePacks = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    _curseForgeService = Provider.of<CurseForgeService>(context, listen: false);
     _loadResourcePacks();
   }
 
@@ -30,12 +34,20 @@ class _InstanceDetailsPageState extends State<InstanceDetailsPage> {
       _isLoading = true;
     });
 
-    final resourcePacks = await _curseForgeService.getResourcePacks(widget.instanceName);
-
-    setState(() {
-      _resourcePacks = resourcePacks;
-      _isLoading = false;
-    });
+    try {
+      final resourcePacks = await _curseForgeService.getResourcePacks(widget.instanceName);
+      setState(() {
+        _resourcePacks = resourcePacks;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erreur: $e')),
+      );
+    }
   }
 
   @override
@@ -44,6 +56,14 @@ class _InstanceDetailsPageState extends State<InstanceDetailsPage> {
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: Text(widget.instanceName),
+        actions: [
+          IconButton(
+            icon: Icon(Theme.of(context).brightness == Brightness.light ? Icons.dark_mode : Icons.light_mode),
+            onPressed: () {
+              if (widget.toggleTheme != null) widget.toggleTheme!();
+            },
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -56,14 +76,13 @@ class _InstanceDetailsPageState extends State<InstanceDetailsPage> {
                       leading: const Icon(Icons.folder),
                       title: Text(_resourcePacks[index]),
                       onTap: () {
-                        Navigator.push(
+                        Navigator.pushNamed(
                           context,
-                          MaterialPageRoute(
-                            builder: (context) => ResourcePackSoundsPage(
-                              instanceName: widget.instanceName,
-                              resourcePackName: _resourcePacks[index],
-                            ),
-                          ),
+                          '/resource_pack_sounds',
+                          arguments: {
+                            'instanceName': widget.instanceName,
+                            'resourcePackName': _resourcePacks[index],
+                          },
                         );
                       },
                     );

@@ -16,52 +16,27 @@ class AudioService {
         throw Exception('Fichier introuvable: $filePath');
       }
 
-      final fileSize = await file.length();
-      print('Lecture du fichier: $filePath (taille: ${fileSize ~/ 1024} KB)');
-
       // Arrêter la lecture précédente
       await _audioPlayer.stop();
       _isPlaying = false;
-
-      // Stocker le dernier fichier joué
       _lastPlayedFile = filePath;
 
-      // Configurer le lecteur audio
-      await _audioPlayer.setVolume(1.0);
+      // Normaliser le chemin pour être compatible avec just_audio
+      final normalizedPath = filePath.replaceAll('\\', '/');
 
-      // Tenter la lecture avec différents formats de chemin
       try {
-        // Format 1: Chemin Windows standard
-        print('Tentative avec chemin Windows standard');
-        final normalizedPath = filePath.replaceAll('/', '\\');
         await _audioPlayer.setFilePath(normalizedPath);
         await _audioPlayer.play();
         _isPlaying = true;
-        print('Lecture démarrée avec succès (format Windows)');
-      } catch (e1) {
-        print('Échec de lecture avec format Windows: $e1');
+      } catch (e) {
+        // Essayer avec le préfixe file:// si la première méthode échoue
         try {
-          // Format 2: Chemin avec slash
-          print('Tentative avec chemin style URL');
-          final urlPath = filePath.replaceAll('\\', '/');
-          await _audioPlayer.setFilePath(urlPath);
+          final fileUrl = 'file://$normalizedPath';
+          await _audioPlayer.setUrl(fileUrl);
           await _audioPlayer.play();
           _isPlaying = true;
-          print('Lecture démarrée avec succès (format URL)');
         } catch (e2) {
-          print('Échec de lecture avec format URL: $e2');
-          try {
-            // Format 3: URL file://
-            print('Tentative avec file:// URL');
-            final fileUrl = 'file://${filePath.replaceAll('\\', '/')}';
-            await _audioPlayer.setUrl(fileUrl);
-            await _audioPlayer.play();
-            _isPlaying = true;
-            print('Lecture démarrée avec succès (format file://)');
-          } catch (e3) {
-            print('Échec de lecture avec format file://: $e3');
-            throw Exception('Impossible de lire le fichier audio après plusieurs tentatives');
-          }
+          throw Exception('Impossible de lire le fichier audio: $e2');
         }
       }
     } catch (e) {
@@ -80,9 +55,6 @@ class AudioService {
     _isPlaying = false;
   }
 
-  String? getLastPlayedFile() {
-    return _lastPlayedFile;
-  }
-
+  String? get lastPlayedFile => _lastPlayedFile;
   bool get isPlaying => _isPlaying;
 }

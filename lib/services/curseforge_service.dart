@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as path;
 import '../models/sound.dart';
 import 'package:archive/archive_io.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -24,7 +26,32 @@ class CurseForgeService {
 
   Future<void> _initPath() async {
     final homeDir = Platform.environment['USERPROFILE'] ?? '';
-    _curseForgePath = '$homeDir\\curseforge\\minecraft\\Instances';
+    _curseForgePath = path.join(homeDir, 'curseforge', 'minecraft', 'Instances');
+  }
+
+  /// Normalise un chemin selon la plateforme
+  String _normalizePath(String filePath) {
+    return path.normalize(filePath);
+  }
+
+  /// Joint des segments de chemin de façon compatible multiplateforme
+  String _joinPath(List<String> parts) {
+    return path.joinAll(parts);
+  }
+
+  /// Vérifie les permissions nécessaires (à appeler au démarrage de l'application)
+  Future<void> checkPermissions() async {
+    try {
+      // Demander les permissions de fichier selon la plateforme
+      if (Platform.isAndroid || Platform.isIOS) {
+        final status = await Permission.storage.request();
+        if (!status.isGranted) {
+          throw Exception('Accès aux fichiers refusé');
+        }
+      }
+    } catch (e) {
+      debugPrint('Erreur lors de la vérification des permissions: $e');
+    }
   }
 
   Future<List<String>> getInstances() async {
@@ -34,9 +61,10 @@ class CurseForgeService {
       if (!await directory.exists()) {
         return [];
       }
-      return await directory.list().where((entity) => entity is Directory).map((entity) => entity.path.split('\\').last).where((name) => name.toLowerCase() != 'curseforge').toList();
+
+      return await directory.list().where((entity) => entity is Directory).map((entity) => path.basename(entity.path)).where((name) => name.toLowerCase() != 'curseforge').toList();
     } catch (e) {
-      print('Error reading CurseForge instances: $e');
+      debugPrint('Erreur lors de la lecture des instances CurseForge: $e');
       return [];
     }
   }
@@ -44,23 +72,23 @@ class CurseForgeService {
   Future<List<String>> getResourcePacks(String instanceName) async {
     await _ensureInitialized();
     try {
-      final resourcePacksPath = '${await getInstancePath(instanceName)}\\resourcepacks';
+      final resourcePacksPath = path.join(await getInstancePath(instanceName), 'resourcepacks');
       final directory = Directory(resourcePacksPath);
 
       if (!await directory.exists()) {
         return [];
       }
 
-      return await directory.list().where((entity) => entity is Directory || entity.path.endsWith('.zip')).map((entity) => entity.path.split('\\').last).toList();
+      return await directory.list().where((entity) => entity is Directory || entity.path.endsWith('.zip')).map((entity) => path.basename(entity.path)).toList();
     } catch (e) {
-      print('Error reading resource packs: $e');
+      debugPrint('Erreur lors de la lecture des resource packs: $e');
       return [];
     }
   }
 
   Future<String> getInstancePath(String instanceName) async {
     await _ensureInitialized();
-    return '$_curseForgePath\\$instanceName';
+    return path.join(_curseForgePath, instanceName);
   }
 
   Future<String> getCurseForgePath() async {
@@ -73,18 +101,15 @@ class CurseForgeService {
     try {
       // Utiliser le dossier extrait plutôt que le .zip
       final instancePath = await getInstancePath(instanceName);
-      final extractedPath = '$instancePath\\extracted\\$resourcePackName';
-      final soundsJsonPath = '$extractedPath\\assets\\minecraft\\sounds.json';
-      final soundsDirPath = '$extractedPath\\assets\\minecraft\\sounds';
-
-      print('Lecture des sons depuis le dossier extrait: $extractedPath');
+      final extractedPath = path.join(instancePath, 'extracted', resourcePackName);
+      final soundsJsonPath = path.join(extractedPath, 'assets', 'minecraft', 'sounds.json');
+      final soundsDirPath = path.join(extractedPath, 'assets', 'minecraft', 'sounds');
 
       final List<Sound> sounds = [];
 
       // Lire le fichier sounds.json
       final soundsJsonFile = File(soundsJsonPath);
       if (await soundsJsonFile.exists()) {
-        print('Fichier sounds.json trouvé: $soundsJsonPath');
         final jsonContent = await soundsJsonFile.readAsString();
         final soundsData = jsonDecode(jsonContent) as Map<String, dynamic>;
 
@@ -102,18 +127,15 @@ class CurseForgeService {
             }
           }
         });
-      } else {
-        print('Fichier sounds.json non trouvé: $soundsJsonPath');
       }
 
       // Explorer le dossier sounds pour trouver les fichiers .ogg
       final soundsDir = Directory(soundsDirPath);
       if (await soundsDir.exists()) {
-        print('Dossier de sons trouvé: $soundsDirPath');
         await for (var entity in soundsDir.list(recursive: true)) {
           if (entity is File && entity.path.endsWith('.ogg')) {
-            final relativePath = entity.path.substring(soundsDirPath.length + 1);
-            final soundName = relativePath.replaceAll('\\', '/').replaceAll('.ogg', '');
+            final relativePath = path.relative(entity.path, from: soundsDirPath).replaceAll(r'\', '/');
+            final soundName = relativePath.replaceAll('.ogg', '');
 
             // Vérifier si le son existe déjà dans la liste
             if (!sounds.any((s) => s.path == soundName)) {
@@ -126,14 +148,11 @@ class CurseForgeService {
             }
           }
         }
-      } else {
-        print('Dossier de sons non trouvé: $soundsDirPath');
       }
 
-      print('Nombre de sons trouvés: ${sounds.length}');
       return sounds;
     } catch (e) {
-      print('Error reading resource pack sounds: $e');
+      debugPrint('Erreur lors de la lecture des sons: $e');
       return [];
     }
   }
@@ -141,12 +160,8 @@ class CurseForgeService {
   Future<void> extractResourcePack(String instanceName, String resourcePackName) async {
     await _ensureInitialized();
     try {
-      final resourcePackPath = '${await getInstancePath(instanceName)}\\resourcepacks\\$resourcePackName';
-      final destinationPath = '${await getInstancePath(instanceName)}\\extracted\\$resourcePackName';
-
-      print('Vérification du resource pack: $resourcePackName');
-      print('Chemin source: $resourcePackPath');
-      print('Chemin destination: $destinationPath');
+      final resourcePackPath = path.join(await getInstancePath(instanceName), 'resourcepacks', resourcePackName);
+      final destinationPath = path.join(await getInstancePath(instanceName), 'extracted', resourcePackName);
 
       // Vérifier si le dossier extrait existe déjà
       final destinationDir = Directory(destinationPath);
@@ -154,10 +169,7 @@ class CurseForgeService {
         // Vérifier si le dossier contient des fichiers
         final files = await destinationDir.list().toList();
         if (files.isNotEmpty) {
-          print('Le resource pack est déjà extrait (${files.length} fichiers/dossiers trouvés)');
           return; // Skip extraction si le dossier existe et n'est pas vide
-        } else {
-          print('Le dossier d\'extraction existe mais est vide, extraction nécessaire');
         }
       }
 
@@ -166,98 +178,60 @@ class CurseForgeService {
       final sourceDir = Directory(resourcePackPath);
 
       if (!(await source.exists()) && !(await sourceDir.exists())) {
-        print('Source non trouvée: $resourcePackPath');
-        return;
+        throw Exception('Resource pack non trouvé: $resourcePackPath');
       }
 
       // Préparer le dossier de destination
       if (await destinationDir.exists()) {
         // Supprimer le dossier existant pour éviter les conflits
         await destinationDir.delete(recursive: true);
-        print('Ancien dossier de destination supprimé.');
       }
 
       await destinationDir.create(recursive: true);
-      print('Dossier de destination créé: $destinationPath');
 
       // Déterminer si la source est un dossier ou un fichier zip
       bool isDirectory = await sourceDir.exists();
 
       if (isDirectory) {
         // Si c'est un dossier, copier le contenu
-        print('La source est un dossier, copie des fichiers...');
         await _copyDirectory(sourceDir, destinationDir);
-        print('Copie du dossier terminée.');
       } else {
         // Si c'est un fichier zip, l'extraire
-        print('La source est un fichier zip, extraction...');
         try {
-          // Utiliser ZipFileEncoder/Decoder pour éviter les problèmes de permission
-          final inputStream = source.openRead();
-          List<int> bytes = [];
-          await for (var chunk in inputStream) {
-            bytes.addAll(chunk);
-          }
-
+          // Utiliser la bibliothèque archive pour extraire
+          final bytes = await source.readAsBytes();
           final archive = ZipDecoder().decodeBytes(bytes);
 
+          // Extraire tous les fichiers
           for (final file in archive) {
-            final filePath = '$destinationPath\\${file.name.replaceAll('/', '\\')}';
+            final outputPath = path.join(destinationPath, file.name);
             if (file.isFile) {
-              final data = file.content as List<int>;
-              final outFile = File(filePath);
-              await outFile.parent.create(recursive: true);
-              await outFile.writeAsBytes(data);
-              print('Fichier extrait: ${file.name}');
+              final outputFile = File(outputPath);
+              await outputFile.parent.create(recursive: true);
+              await outputFile.writeAsBytes(file.content as List<int>);
             } else {
-              await Directory(filePath).create(recursive: true);
-              print('Dossier créé: ${file.name}');
+              await Directory(outputPath).create(recursive: true);
             }
           }
-          print('Extraction terminée.');
         } catch (e) {
-          print('Erreur lors de l\'extraction du zip: $e');
-          // Essayer une approche alternative
-          print('Tentative d\'extraction alternative...');
-          try {
-            await Process.run('powershell', [
-              '-command',
-              "Expand-Archive -Path '$resourcePackPath' -DestinationPath '$destinationPath' -Force"
-            ]);
-            print('Extraction alternative terminée.');
-          } catch (e) {
-            print('Erreur lors de l\'extraction alternative: $e');
-          }
+          throw Exception('Erreur lors de l\'extraction: $e');
         }
       }
-
-      print('Extraction/copie terminée. Dossier extrait: $destinationPath');
     } catch (e) {
-      print('Erreur lors de l\'extraction du resource pack: $e');
+      debugPrint('Erreur lors de l\'extraction: $e');
+      rethrow;
     }
   }
 
-  // Méthode pour copier un dossier et son contenu
   Future<void> _copyDirectory(Directory source, Directory destination) async {
     await for (var entity in source.list(recursive: false)) {
-      final newPath = '${destination.path}\\${entity.path.split('\\').last}';
-
       if (entity is Directory) {
-        final newDir = Directory(newPath);
-        await newDir.create(recursive: true);
-        await _copyDirectory(entity, newDir);
+        final newDirectory = Directory(path.join(destination.path, path.basename(entity.path)));
+        await newDirectory.create();
+        await _copyDirectory(entity, newDirectory);
       } else if (entity is File) {
-        await entity.copy(newPath);
-        print('Fichier copié: ${entity.path}');
+        await entity.copy(path.join(destination.path, path.basename(entity.path)));
       }
-    }
-  }
-
-  Future<void> checkPermissions() async {
-    if (await Permission.storage.request().isGranted) {
-      print('Permissions accordées.');
-    } else {
-      print('Permissions non accordées.');
     }
   }
 }
