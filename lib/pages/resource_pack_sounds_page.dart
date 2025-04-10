@@ -75,24 +75,34 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
     _curseForgeService = Provider.of<CurseForgeService>(context, listen: false);
     _audioService = Provider.of<AudioService>(context, listen: false);
     _resourceMatcher = Provider.of<ResourceMatcherService>(context, listen: false);
-
-    // Écouter les changements de progression
     _resourceMatcher.progressController.addListener(_onProgressChanged);
-
-    // Écouter le défilement pour charger plus d'éléments
-    _scrollController.addListener(_onScroll);
-
     _extractedPath = widget.extractedPath;
-    _currentError = null;
 
-    // Récupérer les correspondances textures-sons
-    _extractAndLoadSounds();
+    // Initialiser le générateur de scores
+    if (_extractedPath.isNotEmpty) {
+      _extractAndLoadSounds();
+    }
+
+    // Configurer le scrollController pour la pagination
+    _scrollController.addListener(() {
+      final maxScroll = _scrollController.position.maxScrollExtent;
+      final currentScroll = _scrollController.position.pixels;
+      if (maxScroll - currentScroll <= 500 && !_isLoading && _hasMoreItems) {
+        _loadMoreItems();
+      }
+    });
   }
 
   @override
   void dispose() {
     _resourceMatcher.progressController.removeListener(_onProgressChanged);
-    _scrollController.removeListener(_onScroll);
+    _scrollController.removeListener(() {
+      final maxScroll = _scrollController.position.maxScrollExtent;
+      final currentScroll = _scrollController.position.pixels;
+      if (maxScroll - currentScroll <= 500 && !_isLoading && _hasMoreItems) {
+        _loadMoreItems();
+      }
+    });
     _scrollController.dispose();
     _audioService.dispose();
     _searchController.dispose();
@@ -139,7 +149,7 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
     });
   }
 
-  void _resetPagination() {
+  void _resetPagination({bool forceLoad = false}) {
     _currentPage = 0;
     _paginatedSounds = [];
     _hasMoreItems = true;
@@ -177,17 +187,37 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
     if (mounted) setState(() {});
   }
 
+  /// Change le message de chargement
+  void _updateLoadingMessage(String message) {
+    if (!mounted) return;
+    setState(() {
+      _loadingMessage = message;
+    });
+  }
+
+  /// Extraire et charger les sons du pack de ressources
   Future<void> _extractAndLoadSounds() async {
+    if (!mounted) return;
+
     setState(() {
       _isLoading = true;
+      _loadingMessage = 'Préparation du chargement...';
       _currentError = null;
-      // Effacer les caches
-      _cachedFilteredSounds = null;
+
+      // Vider tous les caches pour éviter les données obsolètes
       _soundTextureCache.clear();
       _texturesForSoundCache.clear();
+      _cachedFilteredSounds = null;
     });
 
     try {
+      _updateLoadingMessage('Chargement des sons...');
+
+      // Charger les sons et les catégoriser
+      setState(() {
+        _loadingMessage = 'Chargement des sons...';
+      });
+
       // Extraire le resource pack
       await _curseForgeService.extractResourcePack(
         widget.instanceName,
@@ -199,12 +229,14 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
       _extractedPath = path.join(instancePath, 'extracted', widget.resourcePackName);
 
       // Charger les sons
-      final sounds = await _curseForgeService.getResourcePackSounds(
+      final List<Sound> soundsList = await _curseForgeService.getResourcePackSounds(
         widget.instanceName,
         widget.resourcePackName,
       );
 
-      if (sounds.isEmpty) {
+      if (!mounted) return;
+
+      if (soundsList.isEmpty) {
         setState(() {
           _currentError = 'Aucun son trouvé dans ce resource pack';
           _isLoading = false;
@@ -212,43 +244,43 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
         return;
       }
 
-      // Charger les associations son -> texture depuis le fichier cache ou les générer si nécessaire
-      final soundToTextures = await _resourceMatcher.loadOrGenerateSoundTextureMatches(_extractedPath);
+      // Pas besoin de créer des objets Sound car la méthode getResourcePackSounds le fait déjà
+      final sounds = soundsList;
 
-      debugPrint('Chargement terminé: ${soundToTextures.length} associations son-textures');
+      // Charger ou générer les associations son-texture
+      setState(() {
+        _loadingMessage = 'Analyse des associations son-texture...';
+      });
+      final soundTextureMatches = await _resourceMatcher.loadOrGenerateSoundTextureMatches(_extractedPath);
 
-      // Vider les caches
-      _texturesForSoundCache.clear();
-      _soundTextureCache.clear();
+      if (!mounted) return;
 
       setState(() {
         _sounds = sounds;
-        _soundToTextures = soundToTextures;
+        _soundToTextures = soundTextureMatches;
+        _loadingMessage = '';
         _isLoading = false;
-        // Réinitialiser pour le lazy loading
-        _resetPagination();
+
+        // Vider à nouveau les caches après le chargement pour s'assurer qu'ils sont cohérents
+        _soundTextureCache.clear();
+        _texturesForSoundCache.clear();
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${sounds.length} sons chargés ${soundToTextures.isNotEmpty ? "avec ${soundToTextures.length} associations de textures" : ""}'),
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      // Initialiser la pagination
+      _resetPagination(forceLoad: true);
+
+      // Log de débug pour vérifier les chargements
+      debugPrint('Chargé ${_sounds.length} sons et ${_soundToTextures.length} associations son-texture');
     } catch (e) {
-      setState(() {
-        _currentError = 'Erreur lors du chargement: $e';
-        _isLoading = false;
-      });
-      debugPrint('Erreur lors du chargement: $e');
+      if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Erreur: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
-        ),
-      );
+      setState(() {
+        _isLoading = false;
+        _loadingMessage = '';
+        _currentError = 'Erreur lors du chargement: $e';
+      });
+
+      debugPrint('Erreur pendant le chargement: $e');
     }
   }
 
@@ -413,6 +445,8 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
     }
 
     final List<Map<String, dynamic>> result = [];
+    final List<Map<String, dynamic>> highScoreMatches = []; // Pour les correspondances parfaites (score 1000)
+    final List<Map<String, dynamic>> otherMatches = []; // Pour les autres correspondances
 
     // Normaliser le chemin donné
     final normalizedInput = _normalizePath(soundPath);
@@ -448,6 +482,7 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
       final textureName = path.basenameWithoutExtension(texturePath).toLowerCase();
       int score = 100; // Score par défaut
 
+      // Vérifier s'il s'agit d'une correspondance exacte avec le nom du matériau
       if (textureName == material.toLowerCase()) {
         score = 1000; // Correspondance exacte
       } else if (textureName == '${material.toLowerCase()}_block') {
@@ -458,24 +493,44 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
         score = 300; // Contient le matériau comme sous-chaîne
       }
 
+      // Bonus de score pour le matériau présent dans le chemin
       if (texturePath.contains('/$material/')) {
         score += 200; // Matériau présent dans le chemin
       }
 
-      // Utiliser la clé 'path' pour stocker le chemin de la texture
-      result.add({
+      // Bonus supplémentaire pour bamboo qui est un cas spécial
+      if (material.toLowerCase() == 'bamboo' && textureName.contains('bamboo')) {
+        score += 100;
+      }
+
+      final textureInfo = {
         'path': texturePath,
-        'score': score
-      });
+        'score': score,
+        'name': textureName
+      };
+
+      // Séparer les correspondances parfaites des autres
+      if (score >= 1000) {
+        highScoreMatches.add(textureInfo);
+      } else {
+        otherMatches.add(textureInfo);
+      }
     }
 
-    // Trier par score
-    result.sort((a, b) => (b['score'] as int).compareTo(a['score'] as int));
+    // Trier les deux listes par score décroissant
+    highScoreMatches.sort((a, b) => (b['score'] as int).compareTo(a['score'] as int));
+    otherMatches.sort((a, b) => (b['score'] as int).compareTo(a['score'] as int));
+
+    // Combiner les listes avec les correspondances parfaites en premier
+    result.addAll(highScoreMatches);
+    result.addAll(otherMatches);
 
     // Log pour débogage
     if (result.isNotEmpty) {
-      debugPrint('Textures pour $soundPath: ${result.length}');
-      debugPrint('Première texture: ${result.first['path']}');
+      debugPrint('Textures pour $soundPath (${result.length}): ${material.toLowerCase()}');
+      for (var i = 0; i < result.length && i < 3; i++) {
+        debugPrint('  ${i + 1}. ${result[i]['name']} = ${result[i]['score']}');
+      }
     }
 
     // Mettre en cache le résultat
@@ -791,20 +846,22 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
               final file = File(soundFullPath);
               fileExists = file.existsSync();
 
-              // Récupérer les textures associées dans tous les cas
-              hasTextures = hasSoundTextures(soundFullPath);
+              // Récupérer les textures associées à ce son
+              final texturePaths = _getSoundTexturePaths(soundFullPath);
 
-              // Puis charger les textures si elles existent
+              // Au lieu d'utiliser hasSoundTextures, vérifier directement si des textures existent
+              hasTextures = texturePaths.isNotEmpty;
+
+              // Si des textures existent, les convertir en format attendu avec scores
               if (hasTextures) {
-                texturesForSound = getTexturesForSound(soundFullPath);
+                texturesForSound = _getTexturesWithScores(soundFullPath, texturePaths);
+
                 // Vérification supplémentaire que les textures sont bien chargées
                 hasTextures = texturesForSound.isNotEmpty;
 
-                if (hasTextures) {
-                  debugPrint('Son ${sound.name}: ${texturesForSound.length} textures trouvées');
-                } else {
-                  debugPrint('Son ${sound.name}: aucune texture trouvée après vérification');
-                }
+                debugPrint('Son ${sound.name}: ${texturesForSound.length} textures trouvées');
+              } else {
+                debugPrint('Son ${sound.name}: aucune texture trouvée');
               }
             } catch (e) {
               debugPrint('Erreur lors de la vérification du son $soundFullPath: $e');
@@ -1080,10 +1137,99 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
     return false;
   }
 
-  /// Extrait le nom du matériau à partir du chemin d'un son
+  /// Extraire le matériau à partir du chemin du son
   String _extractMaterial(String soundPath) {
-    final dir = path.dirname(soundPath);
-    return path.basename(dir);
+    try {
+      // Normaliser le chemin pour une analyse plus fiable
+      final normalizedPath = soundPath.replaceAll('\\', '/').toLowerCase();
+
+      // Définir les termes génériques à ignorer
+      final genericTerms = [
+        'break',
+        'place',
+        'step',
+        'hit',
+        'ambient',
+        'random'
+      ];
+
+      // 1. Recherche dans la structure du dossier
+      // Ex: sounds/block/bamboo/break.ogg -> bamboo
+      final parts = normalizedPath.split('/');
+      if (parts.length >= 3) {
+        int soundsIndex = parts.indexOf('sounds');
+        if (soundsIndex != -1 && soundsIndex + 2 < parts.length) {
+          // Récupérer le dossier après "sounds/category/"
+          final material = parts[soundsIndex + 2];
+
+          // Ignorer les termes génériques
+          if (!genericTerms.contains(material)) {
+            return material;
+          }
+        }
+      }
+
+      // 2. Extraction à partir du nom du fichier
+      // Ex: bamboo_break.ogg -> bamboo
+      final fileName = path.basenameWithoutExtension(normalizedPath);
+
+      // Cas spéciaux connus
+      final List<String> knownMaterials = [
+        'bamboo',
+        'amethyst',
+        'ancient_debris',
+        'anvil',
+        'azalea',
+        'bamboo_wood',
+        'basalt',
+        'beacon',
+        'bone',
+        'calcite',
+        'candle',
+        'copper',
+        'deepslate',
+        'dirt',
+        'dripstone',
+        'wood',
+        'grass',
+        'gravel',
+        'honey',
+        'lantern',
+        'metal',
+        'netherrack',
+        'nylium',
+        'sand',
+        'shroomlight',
+        'snow',
+        'soul_sand',
+        'soul_soil',
+        'stone',
+        'wood'
+      ];
+
+      // Rechercher un matériau connu dans le nom du fichier
+      for (final material in knownMaterials) {
+        if (fileName.contains(material)) {
+          return material;
+        }
+      }
+
+      // 3. Dernière tentative: récupérer la partie avant le premier underscore
+      // Ex: wood_step1.ogg -> wood
+      if (fileName.contains('_')) {
+        final firstPart = fileName.split('_').first;
+        if (firstPart.length > 2 && !genericTerms.contains(firstPart)) {
+          return firstPart;
+        }
+      }
+
+      // 4. Récupérer le dossier parent si tout échoue
+      final parent = path.dirname(normalizedPath).split('/').last;
+      return parent;
+    } catch (e) {
+      debugPrint('Erreur lors de l\'extraction du matériau: $e');
+      return '';
+    }
   }
 
   /// Régénère le cache spécifiquement pour un son
@@ -1122,5 +1268,78 @@ class _ResourcePackSoundsPageState extends State<ResourcePackSoundsPage> {
         SnackBar(content: Text('Erreur: $e')),
       );
     }
+  }
+
+  /// Récupère les chemins des textures associées à un son
+  List<String> _getSoundTexturePaths(String soundPath) {
+    // Normaliser le chemin donné
+    final normalizedInput = _normalizePath(soundPath);
+    List<String> texturePaths = [];
+
+    // Vérifier différentes manières de faire correspondre les sons
+    for (final key in _soundToTextures.keys) {
+      final normalizedKey = _normalizePath(key);
+
+      // Correspondance exacte
+      if (normalizedKey == normalizedInput) {
+        texturePaths = _soundToTextures[key]!;
+        break;
+      }
+
+      // Correspondance par nom de fichier
+      if (normalizedKey.endsWith(_normalizePath(path.basename(soundPath)))) {
+        texturePaths = _soundToTextures[key]!;
+        break;
+      }
+
+      // Correspondance par nom de base (sans extension)
+      final soundBase = path.basenameWithoutExtension(soundPath).toLowerCase();
+      if (path.basenameWithoutExtension(key).toLowerCase() == soundBase) {
+        texturePaths = _soundToTextures[key]!;
+        break;
+      }
+    }
+
+    return texturePaths;
+  }
+
+  /// Convertit les chemins de textures en objets avec scores
+  List<Map<String, dynamic>> _getTexturesWithScores(String soundPath, List<String> texturePaths) {
+    final List<Map<String, dynamic>> result = [];
+    final material = _extractMaterial(soundPath);
+
+    // Pour chaque texture, calculer un score
+    for (final texturePath in texturePaths) {
+      final textureName = path.basenameWithoutExtension(texturePath).toLowerCase();
+      int score = 100; // Score par défaut
+
+      // Calculer le score en fonction de la correspondance avec le matériau
+      if (textureName == material.toLowerCase()) {
+        score = 1000; // Correspondance exacte
+      } else if (textureName == '${material.toLowerCase()}_block') {
+        score = 900; // Correspondance avec _block
+      } else if (_containsWholeWord(textureName, material.toLowerCase())) {
+        score = 500; // Contient le matériau comme mot entier
+      } else if (textureName.contains(material.toLowerCase()) && material.length > 3) {
+        score = 300; // Contient le matériau comme sous-chaîne
+      }
+
+      // Bonus de score pour le matériau présent dans le chemin
+      if (texturePath.contains('/$material/')) {
+        score += 200; // Matériau présent dans le chemin
+      }
+
+      // Ajouter la texture avec son score
+      result.add({
+        'path': texturePath,
+        'score': score,
+        'name': textureName
+      });
+    }
+
+    // Trier par score décroissant
+    result.sort((a, b) => (b['score'] as int).compareTo(a['score'] as int));
+
+    return result;
   }
 }
